@@ -4,10 +4,9 @@ import discord
 import sys
 from dataclasses import dataclass, asdict
 from discord.ext import tasks
-from json import dumps, load, JSONEncoder
+from json import dumps, load
 from os.path import exists
 from datetime import datetime, time, timedelta
-from typing import Dict
 
 TOKEN = ""
 GUILD = ""
@@ -36,21 +35,21 @@ class User:
     reminded: bool = False
 
 
-class UserEncoder(JSONEncoder):
-    def default(self, o):
-        if isinstance(o, User):
-            return asdict(o)
-        return str(o)
+def encode_users(o):
+    if isinstance(o, User):
+        return asdict(o)
+    return str(o)
 
 
-def user_from_dict(data: Dict) -> User:
-    user = User(
-        data["name"],
-        data["took_meds"],
-        datetime.fromisoformat(data["next_reminder"]),
-        data["reminded"],
-    )
-    return user
+def decode_users(o):
+    if "name" in o.keys():
+        return User(
+            o["name"],
+            o["took_meds"],
+            datetime.fromisoformat(o["next_reminder"]),
+            o["reminded"],
+        )
+    return o
 
 
 class Database:
@@ -58,14 +57,10 @@ class Database:
         self.data = {"users": {}}
 
     def load(self, filename):
-        loaded_data = load(open(filename, "r"))
-        print(loaded_data)
-        for name, user in loaded_data["users"].items():
-            self.data["users"][name] = user_from_dict(user)
+        self.data = load(open(filename, "r"), object_hook=decode_users)
 
     def save(self, filename):
-        print(self.data)
-        open(filename, "w").write(dumps(self.data, indent=4, cls=UserEncoder))
+        open(filename, "w").write(dumps(self.data, indent=4, default=encode_users))
 
     def add_user(self, name):
         self.data["users"][name] = User(name)
@@ -113,11 +108,11 @@ async def on_message(message):
     if message.channel != channel:
         return
 
-    message_sender = message.author.name
-    if not db.get_user(message_sender):
-        db.add_user(message_sender)
+    sender = message.author.name
+    if not db.get_user(sender):
+        db.add_user(sender)
 
-    user = db.get_user(message_sender)
+    user = db.get_user(sender)
 
     tokens = message.content.lower().split()
     cmd = tokens[0]

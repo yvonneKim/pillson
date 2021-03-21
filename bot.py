@@ -2,10 +2,11 @@
 
 import discord
 import sys
+from dataclasses import dataclass, asdict
 from discord.ext import tasks
-from json import dumps, load
+from json import dumps, load, JSONEncoder
 from os.path import exists
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from typing import Dict
 
 TOKEN = ""
@@ -24,63 +25,30 @@ client = discord.Client()
 
 channel = None
 db = None
+next_reset = datetime.today() + timedelta(hours=5)
 
 
+@dataclass
 class User:
-    def __init__(
-        self,
-        name: str = "",
-        took_meds: bool = False,
-        meds_time: datetime = None,
-        last_reminder: datetime = None,
-    ):
-        self.name: str = name
-        self.took_meds: bool = took_meds
-        self.meds_time: datetime.time = meds_time
-        self.last_reminder: datetime.time = last_reminder
-
-    def get_time(self) -> datetime:
-        if not self.meds_time:
-            return None
-        return self.meds_time
-
-    def set_time(self, time: datetime):
-        self.meds_time = time
-
-    def unset_time(self):
-        self.meds_time = None
-
-    def to_dict(self) -> Dict:
-        meds_time = None
-        if self.meds_time:
-            meds_time = self.meds_time.strftime("%I:%M %p")
-
-        last_reminder = None
-        if self.last_reminder:
-            last_reminder = self.last_reminder.strftime("%I:%M %p")
-
-        return {
-            "name": self.name,
-            "took_meds": self.took_meds,
-            "meds_time": meds_time,
-            "last_reminder": last_reminder,
-        }
+    name: str = ""
+    took_meds: bool = False
+    next_reminder: time = datetime.max
+    reminded: bool = False
 
 
-def user_from_dict(data) -> User:
-    meds_time = None
-    if data["meds_time"]:
-        meds_time = datetime.strptime(data["meds_time"], "%I:%M %p")
+class UserEncoder(JSONEncoder):
+    def default(self, o):
+        if isinstance(o, User):
+            return asdict(o)
+        return str(o)
 
-    last_reminder = None
-    if data["last_reminder"]:
-        last_reminder = datetime.strptime(data["last_reminder"], "%I:%M %p")
 
+def user_from_dict(data: Dict) -> User:
     user = User(
         data["name"],
         data["took_meds"],
-        meds_time,
-        last_reminder,
+        datetime.fromisoformat(data["next_reminder"]),
+        data["reminded"],
     )
     return user
 
@@ -91,14 +59,13 @@ class Database:
 
     def load(self, filename):
         loaded_data = load(open(filename, "r"))
-        for name, user_data in loaded_data["users"].items():
-            self.data["users"][name] = user_from_dict(user_data)
+        print(loaded_data)
+        for name, user in loaded_data["users"].items():
+            self.data["users"][name] = user_from_dict(user)
 
     def save(self, filename):
-        output_data = {"users": {}}
-        for name, user in self.data["users"].items():
-            output_data["users"][name] = user.to_dict()
-        open(filename, "w").write(dumps(output_data))
+        print(self.data)
+        open(filename, "w").write(dumps(self.data, indent=4, cls=UserEncoder))
 
     def add_user(self, name):
         self.data["users"][name] = User(name)
@@ -146,14 +113,14 @@ async def on_message(message):
     if message.channel != channel:
         return
 
+    message_sender = message.author.name
+    if not db.get_user(message_sender):
+        db.add_user(message_sender)
+
+    user = db.get_user(message_sender)
+
     tokens = message.content.lower().split()
     cmd = tokens[0]
-    name = message.author.name
-    user = db.get_user(name)
-    if not user:
-        db.add_user(name)
-        user = db.get_user(name)
-
     if cmd == "/help":
         help_message = (
             "/set_time - set your time to take meds\n"
@@ -165,47 +132,60 @@ async def on_message(message):
 
     if cmd == "/set_time":
         try:
-            time = datetime.strptime(tokens[1] + " " + tokens[2], "%I:%M %p")
+            parsed_time = datetime.strptime(
+                tokens[1] + " " + tokens[2], "%I:%M %p"
+            ).time()
+            next_reminder = datetime.combine(datetime.now(), parsed_time)
         except Exception:
             await channel.send("Please specify a time like this: /set_time 7:12 PM")
             return
 
-        user.set_time(time)
-        await channel.send(f"You just set your meds time for {user.get_time()}")
+        user.next_reminder = next_reminder
+        await channel.send(
+            f"You just set your meds time for {user.next_reminder.strftime('%I:%M %p')}"
+        )
 
     if cmd == "/unset_time":
-        user.unset_time()
+        user.next_reminder = datetime.max
         await channel.send("You just unset your meds time. I won't bother you.")
 
     if cmd == "/took":
-        user.took_meds = True
-        await message.channel.send(f"{name} has just taken their meds today! Congrats!")
+        if user.took_meds:
+            await message.channel.send(f"You've already taken your meds today.")
+
+        else:
+            user.took_meds = True
+            await message.channel.send(
+                f"{user.name} has just taken their meds today! Congrats!"
+            )
 
     sys.stdout.flush()
     db.save(DB_FILENAME)
 
 
-counter = 0
+def reset_users():
+    for user in db.get_users():
+        user.took_meds = False
+        user.reminded = False
 
 
 @tasks.loop(seconds=5.0)
 async def clock():
     global db
-    global counter
+    global next_reset
     now = datetime.now()
-    for user in db.get_users():
-        print(counter)
-        counter += 1
-        if not user.get_time():
-            continue
 
-        if now.time().hour == 5:  # oh boy! 5 am!
-            user.last_reminder = None
+    if now > next_reset:
+        reset_users()
+        next_reset += timedelta(days=1)
 
-        if now > user.get_time():
-            if not user.took_meds and not user.last_reminder:
-                user.last_reminder = now.time()
+    for user in [u for u in db.get_users() if u.next_reminder]:
+        if now > user.next_reminder:
+            if not (user.took_meds or user.reminded):
                 await channel.send(f"Time for {user.name} to take their meds!")
+                user.reminded = True
+
+            user.next_reminder += timedelta(days=1)
 
     db.save(DB_FILENAME)
 

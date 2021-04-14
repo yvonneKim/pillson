@@ -8,6 +8,7 @@ from discord.ext.commands import Bot, DefaultHelpCommand
 from json import dumps, load
 from os.path import exists
 from datetime import datetime, time, timedelta
+import pytz
 
 
 config = load(open("config", "r"))
@@ -15,18 +16,20 @@ TOKEN = config["TOKEN"]
 GUILD = config["GUILD"]
 CHANNEL = config["CHANNEL"]
 DB_FILENAME = config["DB_FILENAME"]
+central = pytz.timezone("US/Central")
 
 bot = Bot("/")
 channel = None
 db = None
-next_reset = datetime.today() + timedelta(hours=5)
+next_reset = datetime.now(central) + timedelta(hours=5)
+end_of_time = datetime.max.replace(tzinfo=central) 
 
 
 @dataclass
 class User:
     name: str = ""
     took_meds: bool = False
-    next_reminder: time = datetime.max
+    next_reminder: time = end_of_time
     reminded: bool = False
 
     def reset(self):
@@ -92,7 +95,7 @@ async def on_ready():
 @bot.command(name="unset_time", brief="Turns off your meds reminder")
 async def unset_time(ctx):
     user = db.get_user(ctx.author.name)
-    user.next_reminder = datetime.max
+    user.next_reminder = end_of_time
     await ctx.send("You just unset your meds time. I won't bother you.")
 
 
@@ -112,7 +115,7 @@ async def set_time(ctx, *, time_str):
     user = db.get_user(ctx.author.name)
     try:
         parsed_time = datetime.strptime(time_str, "%I:%M %p").time()
-        next_reminder = datetime.combine(datetime.now(), parsed_time)
+        next_reminder = datetime.combine(datetime.now(), parsed_time, central)
     except Exception:
         await channel.send("Please specify a time like this: /set_time 7:12 PM")
         return
@@ -127,7 +130,7 @@ async def set_time(ctx, *, time_str):
 async def clock():
     global db
     global next_reset
-    now = datetime.now()
+    now = datetime.now(central)
 
     if now > next_reset:
         [user.reset() for user in db.get_users()]

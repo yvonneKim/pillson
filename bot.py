@@ -172,23 +172,31 @@ async def set_time(ctx, *, time_str):
     print(f"{user.name} successfully set time for {user.next_reminder}")
 
 
+@bot.command(name="reset_pillson", hidden=True)
+async def reset_pillson(ctx):
+    await reset()
+
+
+async def reset():
+    for user in db.get_users():
+        if not user.took_meds:
+            await channel.send(
+                f"{user.name} broke their streak at {user.streak}. Back to zero :("
+            )
+            print(f"{user.name} broke their streak, previously: {user.streak}")
+            user.streak = 0
+
+        user.reset()
+
+
 @loop(seconds=5.0)
 async def clock():
     global db
     global next_reset
     now = central.localize(datetime.now())
-
     if now > next_reset:
         print(f"({now}) Resetting...")
-        for user in db.get_users():
-            if not user.took_meds:
-                await channel.send(
-                    f"{user.name} broke their streak at {user.streak}. Back to zero :("
-                )
-                print(f"{user.name} broke their streak, previously: {user.streak}")
-                user.streak = 0
-
-            user.reset()
+        await reset()
         next_reset += timedelta(days=1)
         print(f"Reset. Next reset time is {next_reset}")
 

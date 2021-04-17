@@ -1,10 +1,9 @@
 # bot.py
 
 import discord
-import sys
 from dataclasses import dataclass, asdict
 from discord.ext.tasks import loop
-from discord.ext.commands import Bot, DefaultHelpCommand
+from discord.ext.commands import Bot
 from json import dumps, load
 from os.path import exists
 from datetime import datetime, time, timedelta
@@ -21,8 +20,20 @@ central = pytz.timezone("US/Central")
 bot = Bot("/")
 channel = None
 db = None
+role_book = None
 next_reset = central.localize(datetime.now()) + timedelta(hours=5)
 end_of_time = datetime.max.replace(tzinfo=central)
+
+roles = [
+    {"streak": 0, "name": "Unmedicated Plebian", "base_obj": None},
+    {"streak": 1, "name": "Barely Medicated Mess", "base_obj": None},
+    {"streak": 2, "name": "Pill Buddy", "base_obj": None},
+    {"streak": 3, "name": "Triple Piller", "base_obj": None},
+    {"streak": 7, "name": "Medication Sensation", "base_obj": None},
+    {"streak": 14, "name": "Well-Medicated One", "base_obj": None},
+    {"streak": 21, "name": "Master of Taking Pills", "base_obj": None},
+    {"streak": 28, "name": "Pill-Poppin PHD", "base_obj": None},
+]
 
 
 @dataclass
@@ -78,6 +89,24 @@ class Database:
         return [user for _, user in self.data["users"].items()]
 
 
+async def init_roles(guild):
+    existing_roles = await guild.fetch_roles()
+    for role in roles:
+        role_obj = discord.utils.get(existing_roles, name=role["name"])
+        if not role_obj:
+            role_obj = await guild.create_role(name=role["name"])
+
+        role["base_obj"] = role_obj
+
+
+def role_for_streak(streak):
+    for role in reversed(roles):
+        if streak >= role["streak"]:
+            return role["base_obj"]
+
+    return None
+
+
 @bot.event
 async def on_ready():
     global channel
@@ -90,6 +119,8 @@ async def on_ready():
         db.save(DB_FILENAME)
 
     db.load(DB_FILENAME)
+
+    await init_roles(guild)
     print("Pillson online! Please be nice to me.")
     clock.start()
 
@@ -113,9 +144,13 @@ async def took(ctx):
     else:
         user.took_meds = True
         user.streak += 1
-        await ctx.send(
-            f"{user.name} has just taken their meds today! Congrats! Streak is now at {user.streak}."
-        )
+        await ctx.send(f"{user.name} now has a pill poppin streak at {user.streak}!")
+        user_role = role_for_streak(user.streak)
+        if user_role not in ctx.author.roles:
+            print(f"{user.name} just earned a new role: {user_role.name}")
+            await ctx.author.remove_roles(*[role["base_obj"] for role in roles])
+            await ctx.author.add_roles(user_role)
+            await ctx.send(f"CONGRATS! {user.name} is now a {user_role.name}!")
 
 
 @bot.command(name="set_time", brief="Sets a reminder for this time")
@@ -147,6 +182,9 @@ async def clock():
         print(f"({now}) Resetting...")
         for user in db.get_users():
             if not user.took_meds:
+                await channel.send(
+                    f"{user.name} broke their streak at {user.streak}. Back to zero :("
+                )
                 print(f"{user.name} broke their streak, previously: {user.streak}")
                 user.streak = 0
 
@@ -155,7 +193,6 @@ async def clock():
         print(f"Reset. Next reset time is {next_reset}")
 
     for user in db.get_users():
-        print(f"({now}) {user.name} to be reminded: {user.next_reminder}")
         if now > user.next_reminder:
             if not (user.took_meds or user.reminded):
                 print(f"{user.name} did NOT take their meds yet- reminding.")
@@ -163,7 +200,7 @@ async def clock():
                 user.reminded = True
 
             user.next_reminder += timedelta(days=1)
-            print(f"{user.name} Reminded. Next reminder is: {user.next_reminder}")
+            print(f"{user.name} Next reminder is: {user.next_reminder}")
 
     db.save(DB_FILENAME)
 

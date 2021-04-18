@@ -21,7 +21,9 @@ bot = Bot("/")
 channel = None
 db = None
 role_book = None
-next_reset = central.localize(datetime.now()) + timedelta(hours=5)
+next_reset = central.localize(
+    datetime.combine(datetime.now() + timedelta(days=1), time(hour=5))
+)
 end_of_time = datetime.max.replace(tzinfo=central)
 
 roles = [

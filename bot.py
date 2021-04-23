@@ -179,12 +179,25 @@ async def reset_pillson(ctx):
     await reset()
 
 
+@bot.command(name="profile", brief="Show a user's Pillson profile, including stats")
+async def profile(ctx, *, target_user):
+    user = db.get_user(ctx.author.name)
+    print(f"{user.name} issued profile command for user {target_user}")
+    target_user_data = db.get_user(target_user)
+    if not target_user_data:
+        await channel.send(f"{target_user} not found!")
+        return
+
+    await channel.send(f"{target_user_data}")
+
+
 async def reset():
     for user in db.get_users():
         if not user.took_meds:
-            await channel.send(
-                f"{user.name} broke their streak at {user.streak}. Back to zero :("
-            )
+            if user.streak > 0:
+                await channel.send(
+                    f"{user.name} broke their streak at {user.streak}. Back to zero :("
+                )
             print(f"{user.name} broke their streak, previously: {user.streak}")
             user.streak = 0
 
